@@ -2,9 +2,14 @@
 name = "agent-dsview-logic"
 version = "0.1.0"
 description = "Agent-facing MCP server and runner for DSView/sigrok logic analyzer operations"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
   "mcp>=1.27.0"
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
 ]
 
 [project.scripts]
