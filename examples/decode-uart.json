@@ -1,0 +1,9 @@
+{
+  "input_file": "deliverables/logic-analyzer/uart.sr",
+  "channel": "0",
+  "baudrate": 115200,
+  "data_bits": 8,
+  "parity": "none",
+  "stop_bits": "1",
+  "direction": "rx"
+}

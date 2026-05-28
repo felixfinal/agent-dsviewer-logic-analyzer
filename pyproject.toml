@@ -1,0 +1,16 @@
+[project]
+name = "openclaw-mcp-dsview-logic"
+version = "0.1.0"
+description = "MCP server for DSView/sigrok logic analyzer operations"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.27.0"
+]
+
+[project.scripts]
+dsview-logic-runner = "dsview_logic.server:main"
+dsview-logic-mcp = "dsview_logic.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
