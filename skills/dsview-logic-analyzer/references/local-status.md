@@ -12,4 +12,4 @@ Local baseline after整理:
 - DSView binary copied to `/usr/local/bin/DSView`.
 - `sigrok-cli` and `sigrok-firmware-fx2lafw` installed from apt.
 - DreamSourceLab udev rule installed at `/etc/udev/rules.d/60-dreamsourcelab.rules`.
-- OpenClaw MCP server files live under `.openclaw/mcp/servers/dsview-logic/`.
+- Packaged MCP server files live under `src/dsview_logic/` in this repository.

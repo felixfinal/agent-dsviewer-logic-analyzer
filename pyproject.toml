@@ -1,7 +1,7 @@
 [project]
-name = "openclaw-mcp-dsview-logic"
+name = "agent-dsview-logic"
 version = "0.1.0"
-description = "MCP server for DSView/sigrok logic analyzer operations"
+description = "Agent-facing MCP server and runner for DSView/sigrok logic analyzer operations"
 requires-python = ">=3.11"
 dependencies = [
   "mcp>=1.27.0"

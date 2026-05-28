@@ -1,4 +1,4 @@
-# Architecture / 架构说明
+# Architecture
 
 ## Layering
 
@@ -37,6 +37,3 @@ logic-analyzer-agent
 Logic-analyzer operations are repetitive and tool-shaped. MCP keeps command
 construction, output paths, timeout handling, and decoder options in a stable
 interface. The agent and skills stay focused on engineering judgment.
-
-逻辑分析仪操作重复且工具化明显。MCP 负责稳定封装命令、输出路径、超时和解码参数；
-agent 与 skill 保留工程判断，例如采样率是否足够、波形是否证明了问题、下一步该测哪里。
