@@ -11,3 +11,4 @@ deliverables/
 *.srzip
 *.vcd
 *.csv
+native/dslogic-cli/src/dslogic-cli

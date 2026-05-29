@@ -1,0 +1,24 @@
+# Build artifacts
+src/dslogic-cli
+src/*.o
+
+# Third-party headers are vendored — do NOT ignore
+# third_party/ is tracked
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Firmware — not distributed in this repo
+firmware/*.bin
+firmware/*.fw
+firmware/*.dsc
+
+# Capture output
+*.bin

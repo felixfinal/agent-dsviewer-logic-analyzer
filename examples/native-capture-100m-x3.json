@@ -1,0 +1,9 @@
+{
+  "device_index": 1,
+  "stream": 1,
+  "channel_mode": 3,
+  "samplerate": 100000000,
+  "duration": 0,
+  "output_file": "dslogic-100m-x3.bin",
+  "timeout": 15
+}

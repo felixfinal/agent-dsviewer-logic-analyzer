@@ -1,10 +1,9 @@
 {
-  "driver": "dreamsourcelab-dslogic",
-  "channels": "0,1,2,3",
-  "config": {
-    "samplerate": "1m"
-  },
-  "samples": 1000,
-  "output_format": "csv",
-  "output_file": "gpio-smoke.csv"
+  "device_index": 1,
+  "stream": 1,
+  "channel_mode": 0,
+  "samplerate": 1000000,
+  "duration": 1,
+  "output_file": "gpio-smoke.bin",
+  "timeout": 5
 }

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-import shlex
 import shutil
 import subprocess
 import time
@@ -12,9 +10,16 @@ from typing import Any
 from .config import DEFAULT_OUTPUT_DIR
 
 
-def _run(argv: list[str], timeout: int = 30) -> dict[str, Any]:
+def _run(argv: list[str], timeout: int = 30, input_text: str | None = None) -> dict[str, Any]:
     try:
-        proc = subprocess.run(argv, text=True, capture_output=True, timeout=timeout, check=False)
+        proc = subprocess.run(
+            argv,
+            text=True,
+            input=input_text,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
         return {
             "ok": proc.returncode == 0,
             "returncode": proc.returncode,
@@ -39,6 +44,15 @@ def _which(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _native_cli_path() -> str | None:
+    configured = os.environ.get("DSVIEW_LOGIC_NATIVE_CLI")
+    if configured:
+        path = Path(configured).expanduser()
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path)
+    return _which("dslogic-cli")
+
+
 def _safe_output_path(path_value: str | None, suffix: str) -> Path:
     DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if path_value:
@@ -55,101 +69,118 @@ def _safe_output_path(path_value: str | None, suffix: str) -> Path:
 def logic_analyzer_status(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or {}
     dsview = _which("DSView") or _which("dsview")
-    sigrok = _which("sigrok-cli")
+    native = _native_cli_path()
+    libsigrok4dsl = Path("/usr/local/lib/libsigrok4DSL.so").exists()
     result: dict[str, Any] = {
         "dsview_path": dsview,
-        "sigrok_cli_path": sigrok,
-        "fx2lafw_firmware_dir_exists": Path("/usr/share/sigrok-firmware").exists(),
+        "native_dslogic_cli_path": native,
+        "native_libsigrok4dsl_exists": libsigrok4dsl,
+        "native_firmware_dir_exists": Path(os.environ.get("DSL_FW_DIR", "/opt/dslogic/res")).exists(),
         "dreamsourcelab_udev_rule": Path("/etc/udev/rules.d/60-dreamsourcelab.rules").exists(),
         "output_dir": str(DEFAULT_OUTPUT_DIR),
     }
     if dsview:
         r = _run([dsview, "--version"], timeout=10)
         result["dsview_version"] = (r["stdout"] + r["stderr"]).strip()
-    if sigrok:
-        r = _run([sigrok, "--version"], timeout=10)
-        result["sigrok_version"] = (r["stdout"] + r["stderr"]).splitlines()[:20]
-    result["ok"] = bool(dsview and sigrok)
+    if native:
+        r = _run([native, "--version"], timeout=10)
+        result["native_dslogic_version"] = (r["stdout"] + r["stderr"]).strip()
+    result["native_ok"] = bool(native and libsigrok4dsl)
+    result["gui_ok"] = bool(dsview)
+    result["ok"] = bool(result["native_ok"])
     return result
 
 
 def logic_analyzer_scan(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Compatibility alias for native DSLogic/libsigrok4DSL scan."""
+    return logic_analyzer_native_scan(payload or {})
+
+
+def logic_analyzer_native_scan(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or {}
-    sigrok = _which("sigrok-cli")
-    if not sigrok:
-        return {"ok": False, "error": "sigrok-cli not found"}
-    r = _run([sigrok, "--scan"], timeout=int(payload.get("timeout", 20)))
-    text = (r["stdout"] + r["stderr"]).strip()
-    devices = [line.strip() for line in text.splitlines() if line.strip() and not line.startswith("The following")]
-    return {"ok": r["ok"], "devices": devices, "raw": text, "command": r["command"], "returncode": r["returncode"]}
+    native = _native_cli_path()
+    if not native:
+        return {"ok": False, "error": "dslogic-cli not found"}
+    r = _run([native, "scan"], timeout=int(payload.get("timeout", 20)))
+    return {
+        "ok": r["ok"],
+        "stdout": r["stdout"],
+        "stderr": r["stderr"],
+        "command": r["command"],
+        "returncode": r["returncode"],
+    }
 
 
 def logic_analyzer_list_decoders(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or {}
-    sigrok = _which("sigrok-cli")
-    if not sigrok:
-        return {"ok": False, "error": "sigrok-cli not found"}
-    r = _run([sigrok, "--list-supported"], timeout=int(payload.get("timeout", 30)))
-    lines = r["stdout"].splitlines()
-    decoders: list[str] = []
-    in_section = False
-    for line in lines:
-        if line.strip() == "Supported protocol decoders:":
-            in_section = True
-            continue
-        if in_section and line.startswith("Supported "):
-            break
-        if in_section and line.strip():
-            decoders.append(line.strip())
+    decoders = ["uart", "spi", "i2c"]
     query = str(payload.get("query", "")).lower().strip()
     if query:
         decoders = [d for d in decoders if query in d.lower()]
-    return {"ok": r["ok"], "decoders": decoders, "count": len(decoders), "stderr": r["stderr"], "command": r["command"]}
+    return {
+        "ok": True,
+        "backend": "dslogic-cli",
+        "decoders": decoders,
+        "count": len(decoders),
+        "note": "Native dslogic-cli currently provides pure-C UART/SPI/I2C decoders.",
+    }
 
 
 def logic_analyzer_capture(payload: dict[str, Any]) -> dict[str, Any]:
-    sigrok = _which("sigrok-cli")
-    if not sigrok:
-        return {"ok": False, "error": "sigrok-cli not found"}
-    driver = payload.get("driver")
-    requested_output_format = str(payload.get("output_format", "srzip"))
-    # Debian's sigrok package exposes the raw session writer as "srzip", not "sr".
-    # Keep accepting "sr" as a user-facing alias because .sr is the normal filename extension.
-    output_format = "srzip" if requested_output_format == "sr" else requested_output_format
-    suffix = "sr" if output_format == "srzip" else output_format
-    output = _safe_output_path(payload.get("output_file"), suffix)
-    argv = [sigrok]
-    if driver:
-        argv += ["--driver", str(driver)]
-    channels = payload.get("channels")
-    if channels:
-        argv += ["--channels", str(channels)]
-    config = payload.get("config")
-    if isinstance(config, dict):
-        config_text = ",".join(f"{k}={v}" for k, v in config.items())
-        if config_text:
-            argv += ["--config", config_text]
-    elif config:
-        argv += ["--config", str(config)]
-    if payload.get("triggers"):
-        argv += ["--triggers", str(payload["triggers"])]
-    if payload.get("wait_trigger"):
-        argv += ["--wait-trigger"]
-    if payload.get("time"):
-        argv += ["--time", str(payload["time"])]
-    else:
-        argv += ["--samples", str(payload.get("samples", 1000))]
-    argv += ["--output-file", str(output), "--output-format", str(output_format)]
+    """Compatibility alias for native DSLogic/libsigrok4DSL capture."""
+    return logic_analyzer_native_capture(payload)
+
+
+def logic_analyzer_native_capture(payload: dict[str, Any]) -> dict[str, Any]:
+    """Capture with the native DSLogic/libsigrok4DSL backend.
+
+    This is the backend required for DSLogic Plus high-rate modes such as
+    100 MHz x 3 channels. It shells out to dslogic-cli run and writes raw binary
+    logic samples.
+    """
+    native = _native_cli_path()
+    if not native:
+        return {"ok": False, "error": "dslogic-cli not found"}
+
+    output = _safe_output_path(payload.get("output_file"), "bin")
+    device_index = int(payload.get("device_index", 1))
+    stream = int(payload.get("stream", 1))
+    channel_mode = int(payload.get("channel_mode", 3))
+    samplerate = int(payload.get("samplerate", 100_000_000))
+    duration = payload.get("duration", payload.get("duration_sec", 0))
     timeout = int(payload.get("timeout", 30))
-    r = _run(argv, timeout=timeout)
+
+    commands = [
+        f"open {device_index}",
+        f"stream {stream}",
+        f"channel_mode {channel_mode}",
+        f"samplerate {samplerate}",
+    ]
+    if payload.get("vth"):
+        commands.append(f"vth {payload['vth']}")
+    for channel in payload.get("disable_channels", []):
+        commands.append(f"enable {int(channel)} 0")
+    for channel in payload.get("enable_channels", []):
+        commands.append(f"enable {int(channel)} 1")
+    if payload.get("trigger_reset", False):
+        commands.append("trigger reset")
+    if payload.get("trigger"):
+        commands.extend(str(payload["trigger"]).splitlines())
+    commands.append(f"capture {duration} {output} {timeout}")
+    input_text = "\n".join(commands) + "\n"
+    r = _run([native, "run"], timeout=timeout + 5, input_text=input_text)
     return {
-        "ok": r["ok"] and output.exists(),
+        "ok": r["ok"] and output.exists() and output.stat().st_size > 0,
+        "backend": "dslogic-cli",
+        "mode": {
+            "stream": stream,
+            "channel_mode": channel_mode,
+            "samplerate": samplerate,
+        },
         "output_file": str(output),
         "size": output.stat().st_size if output.exists() else 0,
-        "requested_output_format": requested_output_format,
-        "effective_output_format": output_format,
+        "run_script": input_text,
         "command": r["command"],
-        "command_shell": " ".join(shlex.quote(x) for x in r["command"]),
         "returncode": r["returncode"],
         "stdout": r["stdout"],
         "stderr": r["stderr"],
@@ -157,94 +188,59 @@ def logic_analyzer_capture(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def logic_analyzer_decode_file(payload: dict[str, Any]) -> dict[str, Any]:
-    sigrok = _which("sigrok-cli")
-    if not sigrok:
-        return {"ok": False, "error": "sigrok-cli not found"}
-    input_file = payload.get("input_file")
-    decoder = payload.get("decoder")
-    if not input_file or not decoder:
-        return {"ok": False, "error": "input_file and decoder are required"}
-    argv = [sigrok, "--input-file", str(Path(input_file).expanduser()), "--protocol-decoders", str(decoder)]
-    annotations = payload.get("annotations")
-    if annotations:
-        argv += ["--protocol-decoder-annotations", str(annotations)]
-    if payload.get("samplenum"):
-        argv += ["--protocol-decoder-samplenum"]
-    r = _run(argv, timeout=int(payload.get("timeout", 60)))
-    return {"ok": r["ok"], "stdout": r["stdout"], "stderr": r["stderr"], "command": r["command"], "returncode": r["returncode"]}
-
-
-def _sigrok_uart_token_to_text(token: str) -> str:
-    token = token.rstrip("\r\n")
-    if token.startswith("[") and token.endswith("]"):
-        try:
-            value = int(token[1:-1], 16)
-        except ValueError:
-            return token
-        if value == 0x0D:
-            return "\r"
-        if value == 0x0A:
-            return "\n"
-        if 32 <= value < 127:
-            return chr(value)
-        return f"<{value:02X}>"
-    return token
+    """Compatibility alias for native raw binary decode."""
+    return logic_analyzer_native_decode_file(payload)
 
 
 def logic_analyzer_uart_decode_file(payload: dict[str, Any]) -> dict[str, Any]:
-    """Decode UART from a saved sigrok/srzip file with normalized 8N1 defaults."""
-    sigrok = _which("sigrok-cli")
-    if not sigrok:
-        return {"ok": False, "error": "sigrok-cli not found"}
+    """Compatibility alias for native UART decode."""
+    native_payload = dict(payload)
+    native_payload["decoder"] = "uart"
+    if "rx" in native_payload and "channel" not in native_payload:
+        native_payload["channel"] = native_payload["rx"]
+    return logic_analyzer_native_decode_file(native_payload)
+
+
+def logic_analyzer_native_decode_file(payload: dict[str, Any]) -> dict[str, Any]:
+    native = _native_cli_path()
+    if not native:
+        return {"ok": False, "error": "dslogic-cli not found"}
     input_file = payload.get("input_file")
+    decoder = str(payload.get("decoder", "uart")).lower()
     if not input_file:
         return {"ok": False, "error": "input_file is required"}
-    channel = str(payload.get("channel", payload.get("rx", "0")))
-    baudrate = int(payload.get("baudrate", 115200))
-    data_bits = int(payload.get("data_bits", 8))
-    parity = str(payload.get("parity", "none"))
-    stop_bits = str(payload.get("stop_bits", "1"))
-    data_format = str(payload.get("format", "ascii"))
-    direction = str(payload.get("direction", "rx")).lower().strip()
-    if direction not in {"rx", "tx"}:
-        return {"ok": False, "error": "direction must be 'rx' or 'tx'"}
-    decoder = (
-        f"uart:{direction}={channel}:baudrate={baudrate}:data_bits={data_bits}:"
-        f"parity={parity}:stop_bits={stop_bits}:format={data_format}"
-    )
-    annotation = f"uart={direction}-data"
+    if decoder not in {"uart", "spi", "i2c"}:
+        return {"ok": False, "error": "decoder must be uart, spi, or i2c"}
+
     argv = [
-        sigrok,
-        "--input-file", str(Path(input_file).expanduser()),
-        "--protocol-decoders", decoder,
-        "--protocol-decoder-annotations", annotation,
+        native,
+        "decode",
+        decoder,
+        str(Path(input_file).expanduser()),
+        "--samplerate",
+        str(int(payload.get("samplerate", 100_000_000))),
     ]
-    if payload.get("samplenum"):
-        argv += ["--protocol-decoder-samplenum"]
-    r = _run(argv, timeout=int(payload.get("timeout", 60)))
-    # Preserve decoded ASCII spaces. sigrok emits them as lines like "uart-1:  ";
-    # stripping the whole line would erase valid UART data bytes.
-    lines = [line.rstrip("\n") for line in r["stdout"].splitlines() if line.strip()]
-    tokens: list[str] = []
-    for line in lines:
-        if ":" in line:
-            token = line.split(":", 1)[1]
-            if token.startswith(" "):
-                token = token[1:]
-            tokens.append(token)
-    text = "".join(_sigrok_uart_token_to_text(token) for token in tokens)
-    return {
-        "ok": r["ok"],
-        "text": text,
-        "tokens": tokens,
-        "line_count": len(lines),
-        "decoder": decoder,
-        "annotation": annotation,
-        "stdout": r["stdout"],
-        "stderr": r["stderr"],
-        "command": r["command"],
-        "returncode": r["returncode"],
+    option_map = {
+        "channel": "--channel",
+        "baudrate": "--baudrate",
+        "data_bits": "--data-bits",
+        "parity": "--parity",
+        "stop_bits": "--stop-bits",
+        "clk": "--clk",
+        "miso": "--miso",
+        "mosi": "--mosi",
+        "scl": "--scl",
+        "sda": "--sda",
+        "cpol": "--cpol",
+        "cpha": "--cpha",
+        "wordsize": "--wordsize",
+        "bit_order": "--bit-order",
     }
+    for key, option in option_map.items():
+        if key in payload:
+            argv += [option, str(payload[key])]
+    r = _run(argv, timeout=int(payload.get("timeout", 60)))
+    return {"ok": r["ok"], "stdout": r["stdout"], "stderr": r["stderr"], "command": r["command"], "returncode": r["returncode"]}
 
 
 def logic_analyzer_dsview_info(payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -258,16 +254,19 @@ def logic_analyzer_dsview_info(payload: dict[str, Any] | None = None) -> dict[st
         "path": dsview,
         "version": (version_r["stdout"] + version_r["stderr"]).strip(),
         "help": (help_r["stdout"] + help_r["stderr"]).splitlines(),
-        "note": "DSView is GUI-first; use sigrok-cli/MCP tools for scripted capture.",
+        "note": "DSView is GUI-first; use dslogic-cli/libsigrok4DSL tools for scripted capture.",
     }
 
 
 TOOL_REGISTRY = {
     "logic_analyzer_status": logic_analyzer_status,
     "logic_analyzer_scan": logic_analyzer_scan,
+    "logic_analyzer_native_scan": logic_analyzer_native_scan,
     "logic_analyzer_list_decoders": logic_analyzer_list_decoders,
     "logic_analyzer_capture": logic_analyzer_capture,
+    "logic_analyzer_native_capture": logic_analyzer_native_capture,
     "logic_analyzer_decode_file": logic_analyzer_decode_file,
     "logic_analyzer_uart_decode_file": logic_analyzer_uart_decode_file,
+    "logic_analyzer_native_decode_file": logic_analyzer_native_decode_file,
     "logic_analyzer_dsview_info": logic_analyzer_dsview_info,
 }

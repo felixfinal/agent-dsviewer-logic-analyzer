@@ -1,6 +1,6 @@
 ---
 name: agent-dsviewer-logic-analyzer
-description: Agent-facing capability reference for DSView/sigrok logic-analyzer workflows. Use when an agent needs to understand the implemented scan, capture, decode, DSLogic mode, UART validation, and safety capabilities in this repository. For dependency installation and build steps, read INSTALL.md instead.
+description: Agent-facing capability reference for DSView/libsigrok4DSL native logic-analyzer workflows. Use when an agent needs to understand the implemented dslogic-cli scan, capture, decode, DSLogic mode, and safety capabilities in this repository. For dependency installation and build steps, read INSTALL.md instead.
 ---
 
 # Agent DSViewer Logic Analyzer
@@ -8,8 +8,8 @@ description: Agent-facing capability reference for DSView/sigrok logic-analyzer 
 ## Role
 
 This skill describes the implemented capabilities in this repository. It is the
-agent-facing index for deciding what the DSView/sigrok logic-analyzer tool layer
-can do and when to use each function.
+agent-facing index for deciding what the DSView/libsigrok4DSL native
+logic-analyzer tool layer can do and when to use each function.
 
 Dependency installation, Python build, MCP registration, and skill copy commands
 are intentionally kept in `INSTALL.md`.
@@ -18,13 +18,34 @@ are intentionally kept in `INSTALL.md`.
 
 - `logic-analyzer-agent`
   - Top-level planning skill.
-  - Owns measurement intent, channel mapping assumptions, sampling strategy, and pass/fail interpretation.
+  - Owns measurement intent, channel mapping assumptions, sampling strategy, and
+    pass/fail interpretation.
 - `dsview-logic-analyzer`
-  - Concrete DSView/sigrok execution skill.
-  - Owns setup checks, capture workflow, decoder workflow, and known hardware notes.
+  - Concrete DSView/libsigrok4DSL native execution skill.
+  - Owns setup checks, capture workflow, decoder workflow, and known hardware
+    notes.
 - `dsview-logic`
   - MCP/runner tool layer implemented in `src/dsview_logic/`.
   - Owns stable status, scan, capture, and decode calls.
+- `native/dslogic-cli`
+  - Native C backend for DreamSourceLab DSLogic devices.
+  - Links to DSView's `libsigrok4DSL.so`.
+  - Owns high-rate DSLogic Plus modes such as stream `100MHz x3ch`.
+
+## Installation Boundary
+
+`dslogic-cli` is the native CLI code in this repository, but it depends on
+DSView build outputs. Other agents must treat the install as:
+
+1. Build/install DSView's `libsigrok4DSL.so`.
+2. Install/copy DSView firmware resources to `/opt/dslogic/res` or set
+   `DSL_FW_DIR`.
+3. Build/install `native/dslogic-cli/src`.
+4. Verify `logic_analyzer_status.native_ok == true`.
+
+The vendored `native/dslogic-cli/third_party/libsigrok4DSL` headers are not a
+replacement for the runtime `libsigrok4DSL.so`; they only let the CLI compile.
+If native readiness fails, fix DSView/libsigrok4DSL.
 
 ## Implemented Tool Functions
 
@@ -33,77 +54,76 @@ are intentionally kept in `INSTALL.md`.
 Checks local tool readiness and returns:
 
 - DSView executable path and version when available.
-- `sigrok-cli` executable path and version.
-- whether `/usr/share/sigrok-firmware` exists.
-- whether the DreamSourceLab udev rule exists at `/etc/udev/rules.d/60-dreamsourcelab.rules`.
+- native `dslogic-cli` executable path and version when available.
+- whether `/usr/local/lib/libsigrok4DSL.so` exists.
+- whether native firmware resources exist.
+- whether the DreamSourceLab udev rule exists at
+  `/etc/udev/rules.d/60-dreamsourcelab.rules`.
 - default output directory.
-- overall `ok` flag requiring both DSView and `sigrok-cli`.
+- `native_ok`, `gui_ok`, and overall `ok`.
 
 Use this before any hardware capture task.
 
 ### `logic_analyzer_scan`
 
-Runs `sigrok-cli --scan` and returns:
-
-- parsed non-empty device lines.
-- raw scan text.
-- command argv and return code.
+Compatibility wrapper for native `dslogic-cli scan`.
+Alias for `logic_analyzer_native_scan`.
 
 Use this after the analyzer is physically connected. Do not claim hardware
 validation until scan sees a device.
 
+### `logic_analyzer_native_scan`
+
+Runs `dslogic-cli scan`.
+
+Use this for all DSLogic hardware scan operations.
+
 ### `logic_analyzer_list_decoders`
 
-Runs `sigrok-cli --list-supported`, extracts the protocol decoder section, and
-supports optional query filtering.
+Returns native `dslogic-cli` built-in decoders and supports optional query
+filtering.
 
-Use this before protocol work when the decoder name or support status is unclear.
-Examples of useful queries: `uart`, `i2c`, `spi`, `can`, `pwm`.
+Use this before protocol work when the decoder name or support status is
+unclear. Supported native decoders are currently `uart`, `i2c`, and `spi`.
 
 ### `logic_analyzer_capture`
 
-Builds and runs bounded `sigrok-cli` captures.
+Compatibility alias for `logic_analyzer_native_capture`.
 
-Supported payload fields:
+### `logic_analyzer_native_capture`
 
-- `driver`: optional sigrok driver, for example `dreamsourcelab-dslogic`.
-- `channels`: enabled digital channels, for example `0,1,2,3`.
-- `config`: string or object converted to `--config`, commonly `{"samplerate": "1m"}`.
-- `triggers`: optional sigrok trigger expression.
-- `wait_trigger`: optional boolean to wait for trigger.
-- `samples`: bounded sample count, default `1000`.
-- `time`: bounded capture duration; overrides `samples` when supplied.
-- `output_file`: output path or basename.
-- `output_format`: `csv`, `vcd`, `srzip`, or user-facing alias `sr`.
-- `timeout`: subprocess timeout in seconds.
+Runs `dslogic-cli run` for native DSLogic captures.
 
-Output behavior:
+Default payload values implement the DSLogic Plus 100 MHz x3 stream path:
 
-- Relative `output_file` values are written under `deliverables/logic-analyzer/`.
-- `output_format="sr"` is normalized to sigrok's `srzip` writer while keeping `.sr` as the normal filename suffix.
-- Return includes file size, effective format, argv, shell-safe command string, stdout, stderr, and return code.
+- `device_index`: `1`
+- `stream`: `1`
+- `channel_mode`: `3`
+- `samplerate`: `100000000`
+- `duration`: `0` for auto-max hardware-limited capture
+- `output_file`: optional raw binary file name
+- `timeout`: subprocess timeout seconds
 
-Use CSV for quick script checks, VCD for generic waveform viewers, and `.sr`
-session files for protocol decoder workflows.
+The generated command script is equivalent to:
+
+```text
+open 1
+stream 1
+channel_mode 3
+samplerate 100000000
+capture 0 deliverables/logic-analyzer/dslogic-100m-x3.bin 15
+```
+
+Use this for DSLogic Plus high-rate stream/buffer modes. The output is raw
+binary logic data.
 
 ### `logic_analyzer_decode_file`
 
-Runs a generic sigrok protocol decoder against a saved capture.
-
-Supported payload fields:
-
-- `input_file`: required saved capture path.
-- `decoder`: required sigrok decoder expression.
-- `annotations`: optional annotation selector.
-- `samplenum`: optional boolean to include sample numbers.
-- `timeout`: subprocess timeout in seconds.
-
-Use this for decoders other than the normalized UART helper or when custom
-decoder options are needed.
+Compatibility alias for `logic_analyzer_native_decode_file`.
 
 ### `logic_analyzer_uart_decode_file`
 
-Decodes UART from saved `.sr`/srzip captures with stable defaults.
+Compatibility alias for native UART decode from raw `.bin` captures.
 
 Supported payload fields:
 
@@ -122,12 +142,26 @@ Return includes:
 
 - reconstructed `text`.
 - individual decoded `tokens`.
-- generated sigrok decoder string.
-- selected annotation.
 - raw stdout/stderr.
 
-The implementation preserves decoded ASCII spaces and maps common bracketed hex
-tokens such as `[0D]` and `[0A]` to carriage return and newline.
+### `logic_analyzer_native_decode_file`
+
+Runs `dslogic-cli decode` against a native raw binary capture.
+
+Supported decoders:
+
+- `uart`
+- `spi`
+- `i2c`
+
+Common payload fields:
+
+- `input_file`: required raw binary file.
+- `decoder`: `uart`, `spi`, or `i2c`.
+- `samplerate`: defaults to `100000000`.
+- UART options: `channel`, `baudrate`, `data_bits`, `parity`, `stop_bits`.
+- SPI options: `clk`, `miso`, `mosi`, `cpol`, `cpha`, `wordsize`, `bit_order`.
+- I2C options: `scl`, `sda`.
 
 ### `logic_analyzer_dsview_info`
 
@@ -136,14 +170,14 @@ Reports DSView GUI binary information:
 - executable path.
 - version output.
 - help output lines.
-- note that DSView is GUI-first and scripted capture should use `sigrok-cli`.
+- note that DSView is GUI-first and scripted capture should use
+  `dslogic-cli/libsigrok4DSL`.
 
 Use this for local setup diagnostics, not for scripted capture.
 
 ## DSLogic Capture Modes
 
-Known DSLogic Plus mode guidance derived from the local DSView/libsigrok4DSL
-source baseline:
+DSLogic Plus mode guidance derived from the DSView/libsigrok4DSL source:
 
 | Mode | Maximum capture shape | Agent guidance |
 | --- | --- | --- |
@@ -158,20 +192,18 @@ source baseline:
 Agent rules:
 
 - Reduce enabled channels before requesting high sample rates.
+- Use the native `dslogic-cli` backend for all DSLogic scan/capture/decode work.
 - Start with low-risk smoke captures such as `1MHz` and `1000` samples.
 - For protocol decoding, choose a sample rate comfortably above the protocol
-  bit rate; for UART 115200, the local baseline used 1 MHz successfully.
-- Treat captures as snapshots of current wiring. Do not infer stable wiring from an earlier run.
+  bit rate.
+- Treat captures as snapshots of current wiring. Do not infer stable wiring from
+  an earlier run.
 
-## Output Formats
+## Output Format
 
-- `csv`
-  - Best for quick validation scripts and frequency/edge interval checks.
-- `vcd`
-  - Best for generic waveform viewers and EDA tooling.
-- `sr` / `srzip`
-  - Best for sigrok decoder workflows.
-  - On the local Debian/sigrok baseline, the raw session writer is `srzip`; the tool accepts `sr` as a user-facing alias.
+- Native captures write raw binary `.bin`.
+- Use `scripts/capture_verify.py` for quick signal sanity checks.
+- Use `logic_analyzer_native_decode_file` for UART/SPI/I2C protocol decode.
 
 ## Supported Workflow Patterns
 
@@ -179,38 +211,46 @@ Agent rules:
 
 1. Record probe-to-channel mapping.
 2. Run status and scan.
-3. Capture a short CSV at a conservative sample rate.
-4. Compute edge intervals or inspect waveform.
-5. Distinguish adjacent-edge interval from full high-to-high or low-to-low period.
-
-For a 50% square wave, adjacent edge spacing is half of the full period.
+3. Capture a short bounded raw `.bin` at a conservative sample rate.
+4. Run `scripts/capture_verify.py` or native decode as appropriate.
+5. Distinguish adjacent-edge interval from full high-to-high or low-to-low
+   period. For a 50% square wave, adjacent edge spacing is half of the full
+   period.
 
 ### UART Validation
 
 1. Capture TX as one digital channel first.
-2. Save both CSV for basic signal checks and `.sr`/srzip for decoder work.
-3. Decode with `logic_analyzer_uart_decode_file`.
+2. Save a native raw `.bin` capture.
+3. Decode with `logic_analyzer_native_decode_file`.
 4. Report channel, baud rate, frame options, capture file path, decoded text,
    and whether stop-bit or framing errors appeared in raw decoder output.
 
-Validated local baseline:
-
-- HPM5300EVK UART2 TX on PB08 to DSLogic D0.
-- `115200 8N1`.
-- 1 MHz sampling.
-- decoded repeated text like `HPM5300EVK UART2 PB08 115200 8N1 seq=N`.
-
 ### Generic Protocol Decode
 
-1. Use `logic_analyzer_list_decoders` to confirm decoder availability.
-2. Capture to `.sr`/srzip.
-3. Run `logic_analyzer_decode_file` with the exact decoder expression.
-4. Report decoder expression and selected annotations.
+1. Use `logic_analyzer_list_decoders` to confirm native decoder availability.
+2. Capture to raw `.bin`.
+3. Run `logic_analyzer_native_decode_file`.
+4. Report decoder options and decoded output.
+
+### Native 100 MHz x3 Capture
+
+1. Confirm `logic_analyzer_status.native_ok` is true.
+2. Run `logic_analyzer_native_scan` and confirm the DSLogic device is visible.
+3. Run `logic_analyzer_native_capture` with `stream=1`, `channel_mode=3`, and
+   `samplerate=100000000`.
+4. Decode raw binary with `logic_analyzer_native_decode_file` when needed.
+5. Report the raw file path, byte count, mode, sample rate, and trigger state.
 
 ## Safety Boundaries
 
-- Keep captures bounded by samples or time unless the user explicitly requests continuous capture.
-- Do not assume probe wiring. Record the channel-to-signal mapping in the result.
+- Keep captures bounded by samples or time unless the user explicitly requests
+  continuous capture.
+- Do not assume probe wiring. Record the channel-to-signal mapping in the
+  result.
 - Prefer read-only/status checks until the user says the analyzer is connected.
-- Do not claim hardware validation until both scan and at least one bounded capture succeed.
-- Do not vendor or redistribute upstream DSView source trees or firmware blobs from this repository.
+- Do not claim hardware validation until both scan and at least one bounded
+  capture succeed.
+- Do not vendor or redistribute upstream DSView source trees or firmware blobs
+  from this repository.
+- Native `dslogic-cli` vendors only the header subset needed to compile. Keep
+  its local license notices intact.

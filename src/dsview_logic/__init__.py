@@ -1,4 +1,4 @@
-"""DSView/sigrok logic-analyzer MCP tools."""
+"""DSView/libsigrok4DSL native logic-analyzer MCP tools."""
 
 __all__ = ["__version__"]
 

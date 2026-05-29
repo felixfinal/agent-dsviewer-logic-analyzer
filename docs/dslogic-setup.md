@@ -6,7 +6,7 @@ On Debian/Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y sigrok-cli sigrok-firmware-fx2lafw
+sudo apt install -y build-essential pkg-config libglib2.0-dev cmake git
 ```
 
 Install DSView separately if your distribution does not package it.
@@ -29,18 +29,53 @@ sudo udevadm trigger
 
 Unplug and reconnect the analyzer after changing rules.
 
-## Known Local Baseline
+## Native Backend Setup
 
-The original local validation used:
+Build and install DSView's native library:
 
-- DSView 1.3.2
-- Debian `sigrok-cli` 0.7.2
-- DreamSourceLab DSLogic Plus / DSLogic Pro detected by sigrok after firmware load
-- HPM5300EVK GPIO and UART2 TX validation at low sample rates
+```bash
+git clone https://github.com/DreamSourceLab/DSView.git
+cd DSView
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
+make -j4
+sudo make install
+sudo ldconfig
+```
+
+Install firmware resources for `dslogic-cli`:
+
+```bash
+sudo mkdir -p /opt/dslogic/res
+sudo cp /path/to/DSView/DSView/res/DSLogic*.bin /opt/dslogic/res/
+sudo cp /path/to/DSView/DSView/res/DSLogic*.fw /opt/dslogic/res/
+sudo cp /path/to/DSView/DSView/res/DSLogic*.dsc /opt/dslogic/res/
+```
+
+Build the native CLI included in this repository:
+
+```bash
+cd native/dslogic-cli/src
+make
+sudo make install
+```
+
+The 100 MHz x3 capture mode is:
+
+```text
+open 1
+stream 1
+channel_mode 3
+samplerate 100000000
+capture 0 /tmp/dslogic-100m-x3.bin 15
+```
 
 ## Capture Advice
 
 - Start with low-risk short captures, for example 1 MHz and 1000 samples.
-- For high sample rates, reduce enabled channels according to the analyzer mode.
-- Save CSV for script analysis and `.sr`/srzip for decoder workflows.
-- For UART, capture TX first, then decode with the normalized UART helper.
+- For high sample rates, reduce enabled channels according to the analyzer
+  mode.
+- For DSLogic Plus `100MHz x3ch`, use native `dslogic-cli`.
+- Native output is raw `.bin`; use `scripts/capture_verify.py` and
+  `logic_analyzer_native_decode_file` for validation/decode.
+- For UART, capture TX first, then decode with the native UART helper.

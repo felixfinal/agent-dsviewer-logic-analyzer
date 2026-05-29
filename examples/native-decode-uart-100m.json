@@ -1,10 +1,10 @@
 {
-  "input_file": "deliverables/logic-analyzer/uart.bin",
+  "input_file": "deliverables/logic-analyzer/dslogic-100m-x3.bin",
   "decoder": "uart",
   "samplerate": 100000000,
-  "channel": "0",
+  "channel": 0,
   "baudrate": 115200,
   "data_bits": 8,
   "parity": "none",
-  "stop_bits": "1"
+  "stop_bits": 1
 }
